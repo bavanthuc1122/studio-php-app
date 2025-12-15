@@ -11,7 +11,7 @@ function jsonResponse($success, $message = '', $data = null, $code = 200) {
     if ($data !== null) { $resp['data'] = $data; }
     http_response_code($code);
     echo json_encode($resp, JSON_UNESCAPED_UNICODE);
-    exit;
+    exit; // QUAN TRỌNG: Dừng PHP ngay lập tức
 }
 
 function readJsonBody() {
@@ -49,7 +49,7 @@ function sanitizeStr($v, $max = 1024) {
 }
 
 // --- Handlers ---
-function handleSubmit(PDO $pdo) {
+function handleClientSubmit(PDO $pdo) {
     requireMethod('POST');
     $b = readJsonBody();
     $customer_name = sanitizeStr($b['customer_name'] ?? '', 255);
@@ -117,11 +117,16 @@ function handleUpdateClient(PDO $pdo) {
 
 function handleLogin() {
     requireMethod('POST');
-    $b = readJsonBody();
-    $u = $b['username'] ?? '';
-    $p = $b['password'] ?? '';
-    if ($u === 'admin' && $p === 'studio123') { jsonResponse(true); }
-    jsonResponse(false, '', null, 401);
+    $body = readJsonBody();
+    
+    $u = isset($body['username']) ? trim($body['username']) : '';
+    $p = isset($body['password']) ? trim($body['password']) : '';
+    
+    if ($u === 'admin' && $p === 'studio123') {
+        jsonResponse(true, 'Đăng nhập thành công!');
+    } else {
+        jsonResponse(false, 'Sai tài khoản hoặc mật khẩu!', null, 401);
+    }
 }
 
 function handleAdminData(PDO $pdo) {
@@ -224,20 +229,39 @@ function handleAdminUpdateConfig(PDO $pdo) {
     jsonResponse(true, 'Đã cập nhật giao diện!');
 }
 
+// --- KHỐI ĐIỀU HƯỚNG CHÍNH ---
 $action = isset($_GET['action']) ? $_GET['action'] : '';
-try { $pdo = getPDO(); } catch (Throwable $e) {
-    jsonResponse(false, 'Không thể kết nối Database', null, 500);
+
+// 1. Xử lý Login (KHÔNG CẦN DB)
+if ($action === 'login') {
+    handleLogin(); 
+    exit; 
 }
 
+// 2. Xử lý các Action KHÔNG TỒN TẠI
+if ($action === '') {
+    jsonResponse(false, 'Endpoint không tồn tại', null, 404);
+}
+
+// 3. Xử lý các Action CẦN DATABASE
+// Gọi getPDO() ngay tại đây, nếu lỗi sẽ trả về lỗi 500 rõ ràng
+try { 
+    $pdo = getPDO(); 
+} catch (Throwable $e) {
+    jsonResponse(false, 'Không thể kết nối Database. Vui lòng kiểm tra cấu hình Railway. Lỗi: ' . $e->getMessage(), null, 500);
+}
+
+// 4. Phân luồng các Action CẦN DB
 switch ($action) {
     case 'submit': handleSubmit($pdo); break;
     case 'check': handleCheck($pdo); break;
     case 'update_client': handleUpdateClient($pdo); break;
-    case 'login': handleLogin(); break;
+    
     case 'admin_data': handleAdminData($pdo); break;
     case 'admin_update_ticket': handleAdminUpdateTicket($pdo); break;
     case 'admin_delete_ticket': handleAdminDeleteTicket($pdo); break;
     case 'admin_manage_label': handleAdminManageLabel($pdo); break;
     case 'admin_update_config': handleAdminUpdateConfig($pdo); break;
+    
     default: jsonResponse(false, 'Endpoint không tồn tại', null, 404); break;
 }

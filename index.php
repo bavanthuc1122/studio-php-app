@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -129,7 +130,7 @@
             const link = document.getElementById('c_link').value;
             const note = document.getElementById('c_note').value;
             if(!link) return showToast("Vui lòng nhập Link ảnh!");
-            const res = await fetch('api.php?action=submit', {
+            const res = await fetch('api.php?action=submit', { // <-- Đã sửa URL
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({customer_name: name, shoot_date: date, image_link: link, note: note})
@@ -145,7 +146,7 @@
         async function checkInfo() {
             const link = document.getElementById('search_link').value;
             if(!link) return showToast("Nhập link để tìm!");
-            const res = await fetch('api.php?action=check', {
+            const res = await fetch('api.php?action=check', { // <-- Đã sửa URL
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({image_link: link})
             });
@@ -173,7 +174,7 @@
             const link = document.getElementById('search_link').value;
             const name = document.getElementById('r_name').value;
             const note = document.getElementById('r_note').value;
-            const res = await fetch('api.php?action=update_client', {
+            const res = await fetch('api.php?action=update_client', { // <-- Đã sửa URL
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({image_link: link, customer_name: name, note: note})

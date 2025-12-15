@@ -2,10 +2,10 @@
 -- MySQL schema creation and default data seed for studio-php-app
 
 -- Create database (optional if already exists)
-CREATE DATABASE IF NOT EXISTS studio_db
+--CREATE DATABASE IF NOT EXISTS studio_db
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
-USE studio_db;
+--USE studio_db;
 
 -- Labels table
 CREATE TABLE IF NOT EXISTS labels (

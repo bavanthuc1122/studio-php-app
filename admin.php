@@ -117,12 +117,17 @@
         const PUBLIC_LABELS = ["Mới", "Đã xử lý", "Chờ phản hồi", "Hoàn thành"];
 
         async function login() {
-            const u = document.getElementById('u_name').value;
-            const p = document.getElementById('u_pass').value;
+            const uName = document.getElementById('u_name').value;
+            const uPass = document.getElementById('u_pass').value;
+
             const res = await fetch('api.php?action=login', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username: u, password: p})
+                headers: { 'Content-Type': 'application/json' },
+                // Đảm bảo key phải là "username" và "password"
+                body: JSON.stringify({ 
+                    username: uName, 
+                    password: uPass 
+                })
             });
             const data = await res.json();
             if(data.success) {
