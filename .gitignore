@@ -1,0 +1,29 @@
+# .gitignore for studio-php-app
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# Logs and caches
+*.log
+logs/
+tmp/
+cache/
+
+# Composer (if added later)
+vendor/
+composer.lock
+
+# Node (if added later)
+node_modules/
+
+# Environment/config
+.env
+.env.local
+.env.*.local
+
+# PHPUnit cache (if used later)
+.phpunit.result.cache
