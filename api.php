@@ -3,7 +3,10 @@
 // Usage: api.php?action=submit|check|update_client|login|admin_data|admin_update_ticket|admin_delete_ticket|admin_manage_label|admin_update_config
 
 header('Content-Type: application/json; charset=utf-8');
-require_once __DIR__ . '/db_config.php';
+
+// Simple error reporting
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
 
 function jsonResponse($success, $message = '', $data = null, $code = 200) {
     $resp = ['success' => $success];
@@ -11,7 +14,7 @@ function jsonResponse($success, $message = '', $data = null, $code = 200) {
     if ($data !== null) { $resp['data'] = $data; }
     http_response_code($code);
     echo json_encode($resp, JSON_UNESCAPED_UNICODE);
-    exit; // QUAN TRỌNG: Dừng PHP ngay lập tức
+    exit;
 }
 
 function readJsonBody() {
@@ -26,93 +29,145 @@ function requireMethod($method) {
     }
 }
 
-function isLabelPublic(PDO $pdo, $labelName) {
-    $stmt = $pdo->prepare('SELECT is_public FROM labels WHERE name = ? LIMIT 1');
-    $stmt->execute([$labelName]);
-    $row = $stmt->fetch();
-    if (!$row) return false; // label không tồn tại coi như nội bộ
-    return (int)$row['is_public'] === 1;
-}
-
-function getAllLabelNames(PDO $pdo) {
-    $labels = [];
-    $stmt = $pdo->query('SELECT name FROM labels ORDER BY id ASC');
-    foreach ($stmt as $row) { $labels[] = $row['name']; }
-    return $labels;
-}
-
-function sanitizeStr($v, $max = 1024) {
-    $v = is_string($v) ? trim($v) : '';
-    if ($v === '') return '';
-    if (mb_strlen($v) > $max) { $v = mb_substr($v, 0, $max); }
-    return $v;
+// --- SIMPLIFIED DATABASE CONNECTION ---
+function getPDO() {
+    static $pdo = null;
+    if ($pdo === null) {
+        // Try to get from MYSQL_URL environment variable
+        $mysqlUrl = getenv('MYSQL_URL');
+        if ($mysqlUrl) {
+            $parsed = parse_url($mysqlUrl);
+            if ($parsed) {
+                $host = $parsed['host'] ?? 'localhost';
+                $port = $parsed['port'] ?? '3306';
+                $user = $parsed['user'] ?? 'root';
+                $pass = $parsed['pass'] ?? '';
+                $name = substr($parsed['path'], 1) ?? 'railway';
+                
+                $dsn = "mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4";
+                $pdo = new PDO($dsn, $user, $pass, [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                ]);
+                return $pdo;
+            }
+        }
+        
+        // Fallback to individual environment variables
+        $host = getenv('DB_HOST') ?: 'localhost';
+        $port = getenv('DB_PORT') ?: '3306';
+        $user = getenv('DB_USER') ?: 'root';
+        $pass = getenv('DB_PASS') ?: '';
+        $name = getenv('DB_NAME') ?: 'studio_db';
+        
+        $dsn = "mysql:host=$host;port=$port;dbname=$name;charset=utf8mb4";
+        $pdo = new PDO($dsn, $user, $pass, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]);
+    }
+    return $pdo;
 }
 
 // --- Handlers ---
-function handleClientSubmit(PDO $pdo) {
+function handleClientSubmit() {
     requireMethod('POST');
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
     $b = readJsonBody();
-    $customer_name = sanitizeStr($b['customer_name'] ?? '', 255);
-    $shoot_date = sanitizeStr($b['shoot_date'] ?? '', 10); // YYYY-MM-DD
-    $image_link = sanitizeStr($b['image_link'] ?? '', 1024);
-    $note = sanitizeStr($b['note'] ?? '', 5000);
+    $customer_name = trim($b['customer_name'] ?? '');
+    $shoot_date = trim($b['shoot_date'] ?? '');
+    $image_link = trim($b['image_link'] ?? '');
+    $note = trim($b['note'] ?? '');
 
-    if ($image_link === '') {
+    if (empty($image_link)) {
         jsonResponse(false, 'Link ảnh không được để trống!', null, 400);
     }
 
-    $stmt = $pdo->prepare('SELECT id FROM messages WHERE image_link = ? LIMIT 1');
-    $stmt->execute([$image_link]);
-    if ($stmt->fetch()) {
-        jsonResponse(false, 'Link ảnh đã tồn tại!', null, 400);
-    }
-
-    $avatarId = random_int(1, 5);
-    $avatarPath = '/static/avatars/' . $avatarId . '.png';
-
-    $sql = 'INSERT INTO messages (customer_name, shoot_date, image_link, note, status, label, avatar, result_link, result_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
-    $stmt = $pdo->prepare($sql);
-    $sd = $shoot_date !== '' ? $shoot_date : null; // DATE hoặc NULL
     try {
+        $stmt = $pdo->prepare('SELECT id FROM messages WHERE image_link = ? LIMIT 1');
+        $stmt->execute([$image_link]);
+        if ($stmt->fetch()) {
+            jsonResponse(false, 'Link ảnh đã tồn tại!', null, 400);
+        }
+
+        $avatarId = random_int(1, 5);
+        $avatarPath = '/static/avatars/' . $avatarId . '.png';
+
+        $sql = 'INSERT INTO messages (customer_name, shoot_date, image_link, note, status, label, avatar, result_link, result_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+        $stmt = $pdo->prepare($sql);
+        $sd = !empty($shoot_date) ? $shoot_date : null;
         $stmt->execute([$customer_name, $sd, $image_link, $note, 'new', 'Mới', $avatarPath, null, null]);
+
+        jsonResponse(true, 'Đã gửi thông tin!');
     } catch (PDOException $ex) {
-        if ($ex->getCode() === '23000') { jsonResponse(false, 'Link ảnh đã tồn tại!', null, 400); }
-        jsonResponse(false, 'Lỗi hệ thống khi lưu dữ liệu', null, 500);
+        if ($ex->getCode() === '23000') { 
+            jsonResponse(false, 'Link ảnh đã tồn tại!', null, 400); 
+        }
+        jsonResponse(false, 'Lỗi hệ thống khi lưu dữ liệu: ' . $ex->getMessage(), null, 500);
+    }
+}
+
+function handleCheck() {
+    requireMethod('POST');
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
+    $b = readJsonBody();
+    $image_link = trim($b['image_link'] ?? '');
+
+    if (empty($image_link)) { 
+        jsonResponse(false, 'Vui lòng cung cấp link ảnh', null, 400); 
     }
 
-    jsonResponse(true, 'Đã gửi thông tin!');
+    try {
+        $stmt = $pdo->prepare('SELECT id, customer_name, shoot_date, image_link, note, status, label, avatar, result_link, result_content, created_at FROM messages WHERE image_link = ? LIMIT 1');
+        $stmt->execute([$image_link]);
+        $row = $stmt->fetch();
+        if (!$row) { 
+            jsonResponse(false, 'Không tìm thấy thông tin.', null, 404); 
+        }
+
+        jsonResponse(true, '', $row);
+    } catch (Exception $e) {
+        jsonResponse(false, 'Lỗi khi truy vấn dữ liệu: ' . $e->getMessage(), null, 500);
+    }
 }
 
-function handleCheck(PDO $pdo) {
+function handleUpdateClient() {
     requireMethod('POST');
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
     $b = readJsonBody();
-    $image_link = sanitizeStr($b['image_link'] ?? '', 1024);
-    if ($image_link === '') { jsonResponse(false, 'Vui lòng cung cấp link ảnh', null, 400); }
+    $image_link = trim($b['image_link'] ?? '');
+    $customer_name = trim($b['customer_name'] ?? '');
+    $note = trim($b['note'] ?? '');
 
-    $stmt = $pdo->prepare('SELECT id, customer_name, shoot_date, image_link, note, status, label, avatar, result_link, result_content, created_at FROM messages WHERE image_link = ? LIMIT 1');
-    $stmt->execute([$image_link]);
-    $row = $stmt->fetch();
-    if (!$row) { jsonResponse(false, 'Không tìm thấy thông tin.', null, 404); }
+    if (empty($image_link)) { 
+        jsonResponse(false, 'Thiếu link ảnh', null, 400); 
+    }
 
-    $display = $row;
-    if (!isLabelPublic($pdo, $row['label'])) { $display['label'] = 'Đang xử lý'; }
-
-    jsonResponse(true, '', $display);
-}
-
-function handleUpdateClient(PDO $pdo) {
-    requireMethod('POST');
-    $b = readJsonBody();
-    $image_link = sanitizeStr($b['image_link'] ?? '', 1024);
-    $customer_name = sanitizeStr($b['customer_name'] ?? '', 255);
-    $note = sanitizeStr($b['note'] ?? '', 5000);
-
-    if ($image_link === '') { jsonResponse(false, 'Thiếu link ảnh', null, 400); }
-
-    $stmt = $pdo->prepare('UPDATE messages SET customer_name = ?, note = ? WHERE image_link = ?');
-    $stmt->execute([$customer_name, $note, $image_link]);
-    if ($stmt->rowCount() > 0) { jsonResponse(true, 'Đã cập nhật thông tin!'); }
-    jsonResponse(false, 'Không tìm thấy dữ liệu để cập nhật', null, 404);
+    try {
+        $stmt = $pdo->prepare('UPDATE messages SET customer_name = ?, note = ? WHERE image_link = ?');
+        $stmt->execute([$customer_name, $note, $image_link]);
+        if ($stmt->rowCount() > 0) { 
+            jsonResponse(true, 'Đã cập nhật thông tin!'); 
+        }
+        jsonResponse(false, 'Không tìm thấy dữ liệu để cập nhật', null, 404);
+    } catch (Exception $e) {
+        jsonResponse(false, 'Lỗi khi cập nhật dữ liệu: ' . $e->getMessage(), null, 500);
+    }
 }
 
 function handleLogin() {
@@ -129,139 +184,217 @@ function handleLogin() {
     }
 }
 
-function handleAdminData(PDO $pdo) {
+function handleAdminData() {
     requireMethod('GET');
-    $stmt = $pdo->query('SELECT id, customer_name, shoot_date, image_link, note, status, label, avatar, result_link, result_content, created_at FROM messages ORDER BY created_at ASC');
-    $messages = $stmt->fetchAll();
-    $labels = getAllLabelNames($pdo);
-    // Trả về cả data và field cũ để tương thích
-    $payload = ['messages' => $messages, 'labels' => $labels];
-    $out = ['success' => true, 'data' => $payload, 'messages' => $messages, 'labels' => $labels];
-    http_response_code(200);
-    echo json_encode($out, JSON_UNESCAPED_UNICODE);
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
+    try {
+        $stmt = $pdo->query('SELECT id, customer_name, shoot_date, image_link, note, status, label, avatar, result_link, result_content, created_at FROM messages ORDER BY created_at ASC');
+        $messages = $stmt->fetchAll();
+        
+        $labels = [];
+        $labelStmt = $pdo->query('SELECT name FROM labels ORDER BY id ASC');
+        foreach ($labelStmt as $row) { 
+            $labels[] = $row['name']; 
+        }
+        
+        $payload = ['messages' => $messages, 'labels' => $labels];
+        $out = ['success' => true, 'data' => $payload, 'messages' => $messages, 'labels' => $labels];
+        http_response_code(200);
+        echo json_encode($out, JSON_UNESCAPED_UNICODE);
+        exit;
+    } catch (Exception $e) {
+        jsonResponse(false, 'Lỗi khi lấy dữ liệu: ' . $e->getMessage(), null, 500);
+    }
+}
+
+function handleAdminUpdateTicket() {
+    requireMethod('POST');
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
+    $b = readJsonBody();
+    $image_link = trim($b['image_link'] ?? '');
+    $customer_name = trim($b['customer_name'] ?? '');
+    $note = trim($b['note'] ?? '');
+    $label = trim($b['label'] ?? '');
+    $result_link = trim($b['result_link'] ?? '');
+    $result_content = trim($b['result_content'] ?? '');
+
+    if (empty($image_link)) { 
+        jsonResponse(false, 'Thiếu link ảnh', null, 400); 
+    }
+    if (empty($label)) { 
+        jsonResponse(false, 'Thiếu label', null, 400); 
+    }
+
+    try {
+        // Validate label
+        $chk = $pdo->prepare('SELECT 1 FROM labels WHERE name = ? LIMIT 1');
+        $chk->execute([$label]);
+        if (!$chk->fetch()) { 
+            jsonResponse(false, 'Label không hợp lệ', null, 400); 
+        }
+
+        $stmt = $pdo->prepare('UPDATE messages SET customer_name = ?, note = ?, label = ?, result_link = ?, result_content = ? WHERE image_link = ?');
+        $stmt->execute([$customer_name, $note, $label, $result_link, $result_content, $image_link]);
+        if ($stmt->rowCount() > 0) { 
+            jsonResponse(true); 
+        }
+        jsonResponse(false, '', null, 404);
+    } catch (Exception $e) {
+        jsonResponse(false, 'Lỗi khi cập nhật ticket: ' . $e->getMessage(), null, 500);
+    }
+}
+
+function handleAdminDeleteTicket() {
+    requireMethod('POST');
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
+    $b = readJsonBody();
+    $image_link = trim($b['image_link'] ?? '');
+
+    if (empty($image_link)) { 
+        jsonResponse(false, 'Thiếu link ảnh', null, 400); 
+    }
+
+    try {
+        $stmt = $pdo->prepare('DELETE FROM messages WHERE image_link = ?');
+        $stmt->execute([$image_link]);
+        if ($stmt->rowCount() > 0) { 
+            jsonResponse(true, 'Đã xóa thành công!'); 
+        }
+        jsonResponse(false, 'Không tìm thấy dữ liệu để xóa', null, 404);
+    } catch (Exception $e) {
+        jsonResponse(false, 'Lỗi khi xóa ticket: ' . $e->getMessage(), null, 500);
+    }
+}
+
+function handleAdminManageLabel() {
+    requireMethod('POST');
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
+    $b = readJsonBody();
+    $action = $b['action'] ?? '';
+    $label_name = trim($b['label'] ?? '');
+
+    if (empty($label_name)) { 
+        jsonResponse(false, 'Thiếu tên label', null, 400); 
+    }
+
+    try {
+        if ($action === 'add') {
+            $stmt = $pdo->prepare('SELECT id FROM labels WHERE name = ? LIMIT 1');
+            $stmt->execute([$label_name]);
+            if (!$stmt->fetch()) {
+                $ins = $pdo->prepare('INSERT INTO labels (name, is_public) VALUES (?, 0)');
+                $ins->execute([$label_name]);
+            }
+            
+            $labels = [];
+            $labelStmt = $pdo->query('SELECT name FROM labels ORDER BY id ASC');
+            foreach ($labelStmt as $row) { 
+                $labels[] = $row['name']; 
+            }
+            jsonResponse(true, '', ['labels' => $labels]);
+        } elseif ($action === 'delete') {
+            $stmt = $pdo->prepare('SELECT id, is_public FROM labels WHERE name = ? LIMIT 1');
+            $stmt->execute([$label_name]);
+            $row = $stmt->fetch();
+            if (!$row) { 
+                jsonResponse(false, 'Label không tồn tại'); 
+            }
+            if ((int)$row['is_public'] === 1) { 
+                jsonResponse(false, 'Không thể xóa Label mặc định!'); 
+            }
+            
+            $del = $pdo->prepare('DELETE FROM labels WHERE id = ?');
+            $del->execute([$row['id']]);
+            
+            $labels = [];
+            $labelStmt = $pdo->query('SELECT name FROM labels ORDER BY id ASC');
+            foreach ($labelStmt as $row) { 
+                $labels[] = $row['name']; 
+            }
+            jsonResponse(true, '', ['labels' => $labels]);
+        } else {
+            jsonResponse(false, 'Hành động không hợp lệ', null, 400);
+        }
+    } catch (Exception $e) {
+        jsonResponse(false, 'Lỗi khi quản lý label: ' . $e->getMessage(), null, 500);
+    }
+}
+
+function handleAdminUpdateConfig() {
+    requireMethod('POST');
+    try {
+        $pdo = getPDO();
+    } catch (Exception $e) {
+        jsonResponse(false, 'Không thể kết nối database: ' . $e->getMessage(), null, 500);
+    }
+    
+    $b = readJsonBody();
+    $bg = trim($b['bg_image'] ?? '');
+    $txt = trim($b['text_color'] ?? '');
+
+    try {
+        $stmt = $pdo->query('SELECT id, bg_image, text_color FROM config ORDER BY id DESC LIMIT 1');
+        $row = $stmt->fetch();
+        if ($row) {
+            $bg_to_set = !empty($bg) ? $bg : $row['bg_image'];
+            $txt_to_set = !empty($txt) ? $txt : $row['text_color'];
+            $upd = $pdo->prepare('UPDATE config SET bg_image = ?, text_color = ? WHERE id = ?');
+            $upd->execute([$bg_to_set, $txt_to_set, $row['id']]);
+        } else {
+            $bg_to_set = !empty($bg) ? $bg : 'https://images.unsplash.com/photo-1557683316-973673baf926?q=80&w=2029';
+            $txt_to_set = !empty($txt) ? $txt : '#000000';
+            $ins = $pdo->prepare('INSERT INTO config (bg_image, text_color) VALUES (?, ?)');
+            $ins->execute([$bg_to_set, $txt_to_set]);
+        }
+        jsonResponse(true, 'Đã cập nhật giao diện!');
+    } catch (Exception $e) {
+        jsonResponse(false, 'Lỗi khi cập nhật cấu hình: ' . $e->getMessage(), null, 500);
+    }
+}
+
+// --- MAIN REQUEST HANDLING ---
+$action = isset($_GET['action']) ? $_GET['action'] : '';
+
+// Handle login separately (doesn't need database)
+if ($action === 'login') {
+    handleLogin();
     exit;
 }
 
-function handleAdminUpdateTicket(PDO $pdo) {
-    requireMethod('POST');
-    $b = readJsonBody();
-    $image_link = sanitizeStr($b['image_link'] ?? '', 1024);
-    if ($image_link === '') { jsonResponse(false, 'Thiếu link ảnh', null, 400); }
-    $customer_name = sanitizeStr($b['customer_name'] ?? '', 255);
-    $note = sanitizeStr($b['note'] ?? '', 5000);
-    $label = sanitizeStr($b['label'] ?? '', 100);
-    $result_link = sanitizeStr($b['result_link'] ?? '', 1024);
-    $result_content = sanitizeStr($b['result_content'] ?? '', 5000);
-
-    // Validate label must exist in labels table
-    if ($label === '') { jsonResponse(false, 'Thiếu label', null, 400); }
-    $chk = $pdo->prepare('SELECT 1 FROM labels WHERE name = ? LIMIT 1');
-    $chk->execute([$label]);
-    if (!$chk->fetch()) { jsonResponse(false, 'Label không hợp lệ', null, 400); }
-
-    $stmt = $pdo->prepare('UPDATE messages SET customer_name = ?, note = ?, label = ?, result_link = ?, result_content = ? WHERE image_link = ?');
-    $stmt->execute([$customer_name, $note, $label, $result_link, $result_content, $image_link]);
-    if ($stmt->rowCount() > 0) { jsonResponse(true); }
-    jsonResponse(false, '', null, 404);
-}
-
-function handleAdminDeleteTicket(PDO $pdo) {
-    requireMethod('POST');
-    $b = readJsonBody();
-    $image_link = sanitizeStr($b['image_link'] ?? '', 1024);
-    if ($image_link === '') { jsonResponse(false, 'Thiếu link ảnh', null, 400); }
-    $stmt = $pdo->prepare('DELETE FROM messages WHERE image_link = ?');
-    $stmt->execute([$image_link]);
-    if ($stmt->rowCount() > 0) { jsonResponse(true, 'Đã xóa thành công!'); }
-    jsonResponse(false, 'Không tìm thấy dữ liệu để xóa', null, 404);
-}
-
-function handleAdminManageLabel(PDO $pdo) {
-    requireMethod('POST');
-    $b = readJsonBody();
-    $action = $b['action'] ?? '';
-    $label_name = sanitizeStr($b['label'] ?? '', 100);
-    if ($label_name === '') { jsonResponse(false, 'Thiếu tên label', null, 400); }
-
-    if ($action === 'add') {
-        $stmt = $pdo->prepare('SELECT id FROM labels WHERE name = ? LIMIT 1');
-        $stmt->execute([$label_name]);
-        if (!$stmt->fetch()) {
-            $ins = $pdo->prepare('INSERT INTO labels (name, is_public) VALUES (?, 0)');
-            $ins->execute([$label_name]);
-        }
-        $labels = getAllLabelNames($pdo);
-        jsonResponse(true, '', ['labels' => $labels]);
-    } elseif ($action === 'delete') {
-        $stmt = $pdo->prepare('SELECT id, is_public FROM labels WHERE name = ? LIMIT 1');
-        $stmt->execute([$label_name]);
-        $row = $stmt->fetch();
-        if (!$row) { jsonResponse(false, 'Label không tồn tại'); }
-        if ((int)$row['is_public'] === 1) { jsonResponse(false, 'Không thể xóa Label mặc định!'); }
-        $del = $pdo->prepare('DELETE FROM labels WHERE id = ?');
-        $del->execute([$row['id']]);
-        $labels = getAllLabelNames($pdo);
-        jsonResponse(true, '', ['labels' => $labels]);
-    } else {
-        jsonResponse(false, 'Hành động không hợp lệ', null, 400);
-    }
-}
-
-function handleAdminUpdateConfig(PDO $pdo) {
-    requireMethod('POST');
-    $b = readJsonBody();
-    $bg = sanitizeStr($b['bg_image'] ?? '', 4000);
-    $txt = sanitizeStr($b['text_color'] ?? '', 20);
-
-    $stmt = $pdo->query('SELECT id, bg_image, text_color FROM config ORDER BY id DESC LIMIT 1');
-    $row = $stmt->fetch();
-    if ($row) {
-        $bg_to_set = $bg !== '' ? $bg : $row['bg_image'];
-        $txt_to_set = $txt !== '' ? $txt : $row['text_color'];
-        $upd = $pdo->prepare('UPDATE config SET bg_image = ?, text_color = ? WHERE id = ?');
-        $upd->execute([$bg_to_set, $txt_to_set, $row['id']]);
-    } else {
-        $bg_to_set = $bg !== '' ? $bg : 'https://images.unsplash.com/photo-1557683316-973673baf926?q=80&w=2029';
-        $txt_to_set = $txt !== '' ? $txt : '#000000';
-        $ins = $pdo->prepare('INSERT INTO config (bg_image, text_color) VALUES (?, ?)');
-        $ins->execute([$bg_to_set, $txt_to_set]);
-    }
-    jsonResponse(true, 'Đã cập nhật giao diện!');
-}
-
-// --- KHỐI ĐIỀU HƯỚNG CHÍNH ---
-$action = isset($_GET['action']) ? $_GET['action'] : '';
-
-// 1. Xử lý Login (KHÔNG CẦN DB)
-if ($action === 'login') {
-    handleLogin(); 
-    exit; 
-}
-
-// 2. Xử lý các Action KHÔNG TỒN TẠI
+// Handle invalid actions
 if ($action === '') {
     jsonResponse(false, 'Endpoint không tồn tại', null, 404);
 }
 
-// 3. Xử lý các Action CẦN DATABASE
-// Gọi getPDO() ngay tại đây, nếu lỗi sẽ trả về lỗi 500 rõ ràng
-try { 
-    $pdo = getPDO(); 
-} catch (Throwable $e) {
-    jsonResponse(false, 'Không thể kết nối Database. Vui lòng kiểm tra cấu hình Railway. Lỗi: ' . $e->getMessage(), null, 500);
-}
-
-// 4. Phân luồng các Action CẦN DB
+// Route to appropriate handler
 switch ($action) {
-    case 'submit': handleSubmit($pdo); break;
-    case 'check': handleCheck($pdo); break;
-    case 'update_client': handleUpdateClient($pdo); break;
-    
-    case 'admin_data': handleAdminData($pdo); break;
-    case 'admin_update_ticket': handleAdminUpdateTicket($pdo); break;
-    case 'admin_delete_ticket': handleAdminDeleteTicket($pdo); break;
-    case 'admin_manage_label': handleAdminManageLabel($pdo); break;
-    case 'admin_update_config': handleAdminUpdateConfig($pdo); break;
-    
+    case 'submit': handleClientSubmit(); break;
+    case 'check': handleCheck(); break;
+    case 'update_client': handleUpdateClient(); break;
+    case 'admin_data': handleAdminData(); break;
+    case 'admin_update_ticket': handleAdminUpdateTicket(); break;
+    case 'admin_delete_ticket': handleAdminDeleteTicket(); break;
+    case 'admin_manage_label': handleAdminManageLabel(); break;
+    case 'admin_update_config': handleAdminUpdateConfig(); break;
     default: jsonResponse(false, 'Endpoint không tồn tại', null, 404); break;
 }
